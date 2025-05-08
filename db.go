@@ -35,36 +35,60 @@ import (
 )
 
 // ScanNoLimit represents the data scan no limit flag
+// ScanNoLimit 代表没有限制的扫描数据
 const ScanNoLimit int = -1
 const KvWriteChCapacity = 1000
 const FLockName = "nutsdb-flock"
 
 type (
 	// DB represents a collection of buckets that persist on disk.
+	// DB 表示在磁盘上持久存在的bucket集合。
 	DB struct {
-		opt                     Options // the database options
-		Index                   *index
-		ActiveFile              *DataFile
-		MaxFileID               int64
-		mu                      sync.RWMutex
-		KeyCount                int // total key number ,include expired, deleted, repeated.
-		closed                  bool
-		isMerging               bool
-		fm                      *fileManager
-		flock                   *flock.Flock
-		commitBuffer            *bytes.Buffer
-		mergeStartCh            chan struct{}
-		mergeEndCh              chan error
-		mergeWorkCloseCh        chan struct{}
-		writeCh                 chan *request
-		tm                      *ttlManager
-		RecordCount             int64 // current valid record count, exclude deleted, repeated
-		bm                      *BucketManager
+		// the database options
+		// 数据库选项
+		opt Options
+		// 索引
+		Index *index
+		// 活跃文件
+		ActiveFile *DataFile
+		// 最大文件ID
+		MaxFileID int64
+		// 读写锁
+		mu sync.RWMutex
+		// 所有key的数量，包括过期、删除、重复的key
+		KeyCount int // total key number ,include expired, deleted, repeated.
+		// 关闭标识
+		closed bool
+		// 合并标识
+		isMerging bool
+		// 文件管理器
+		fm *fileManager
+		// 文件锁
+		flock *flock.Flock
+		// 提交buffer
+		commitBuffer *bytes.Buffer
+		// 合并开始通道
+		mergeStartCh chan struct{}
+		// 合并结束通道
+		mergeEndCh chan error
+		// 合并工作通道
+		mergeWorkCloseCh chan struct{}
+		// 写通道
+		writeCh chan *request
+		// 生命周期管理器
+		tm *ttlManager
+		// current valid record count, exclude deleted, repeated
+		// 有效记录，排除了删除、重复数据
+		RecordCount int64
+		// bucket管理器
+		bm *BucketManager
+		// 使用LRU缓存的 HintKeyAndRAMIdxMode
 		hintKeyAndRAMIdxModeLru *LRUCache // lru cache for HintKeyAndRAMIdxMode
 	}
 )
 
 // open returns a newly initialized DB object.
+// open 返回一个新初始化的DB实例
 func open(opt Options) (*DB, error) {
 	db := &DB{
 		MaxFileID:               0,
@@ -83,12 +107,14 @@ func open(opt Options) (*DB, error) {
 
 	db.commitBuffer = createNewBufferWithSize(int(db.opt.CommitBufferSize))
 
+	// 创建数据库目录
 	if ok := filesystem.PathIsExist(db.opt.Dir); !ok {
 		if err := os.MkdirAll(db.opt.Dir, os.ModePerm); err != nil {
 			return nil, err
 		}
 	}
 
+	// 新建文件锁
 	fileLock := flock.New(filepath.Join(opt.Dir, FLockName))
 	if ok, err := fileLock.TryLock(); err != nil {
 		return nil, err
@@ -98,30 +124,41 @@ func open(opt Options) (*DB, error) {
 
 	db.flock = fileLock
 
+	// 新建bucket管理器
 	if bm, err := NewBucketManager(opt.Dir); err == nil {
 		db.bm = bm
 	} else {
 		return nil, err
 	}
 
+	// 重建bucket管理器
 	if err := db.rebuildBucketManager(); err != nil {
 		return nil, fmt.Errorf("db.rebuildBucketManager err:%s", err)
 	}
 
+	// 重建索引
 	if err := db.buildIndexes(); err != nil {
 		return nil, fmt.Errorf("db.buildIndexes error: %s", err)
 	}
 
+	// 启动新进程
+	// 合并worker进程
 	go db.mergeWorker()
+	// 写入进程
 	go db.doWrites()
+	// 事务管理进程
 	go db.tm.run()
 
 	return db, nil
 }
 
 // Open returns a newly initialized DB object with Option.
+// Open 返回一个包含Option的新初始化的DB实例
+//
+//	该函数对外暴露
 func Open(options Options, ops ...Option) (*DB, error) {
 	opts := &options
+	// 对options进行某些操作，传入的ops是操作opts的函数
 	for _, do := range ops {
 		do(opts)
 	}
@@ -129,7 +166,9 @@ func Open(options Options, ops ...Option) (*DB, error) {
 }
 
 // Update executes a function within a managed read/write transaction.
+// Update 在受管理的读写事务中执行fn函数。
 func (db *DB) Update(fn func(tx *Tx) error) error {
+	// 如果入参fn为空则返回ErrFn
 	if fn == nil {
 		return ErrFn
 	}
@@ -138,7 +177,9 @@ func (db *DB) Update(fn func(tx *Tx) error) error {
 }
 
 // View executes a function within a managed read-only transaction.
+// View 在受管理的读事务中执行fn函数。
 func (db *DB) View(fn func(tx *Tx) error) error {
+	// 如果入参fn为空则返回ErrFn
 	if fn == nil {
 		return ErrFn
 	}
@@ -147,6 +188,7 @@ func (db *DB) View(fn func(tx *Tx) error) error {
 }
 
 // Backup copies the database to file directory at the given dir.
+// Backup 将数据库复制到指定目录下的文件目录
 func (db *DB) Backup(dir string) error {
 	return db.View(func(tx *Tx) error {
 		return filesystem.CopyDir(db.opt.Dir, dir)
@@ -154,6 +196,7 @@ func (db *DB) Backup(dir string) error {
 }
 
 // BackupTarGZ Backup copy the database to writer.
+// BackupTarGZ 将数据库备份复制到写入器。
 func (db *DB) BackupTarGZ(w io.Writer) error {
 	return db.View(func(tx *Tx) error {
 		return tarGZCompress(w, db.opt.Dir)
@@ -161,16 +204,21 @@ func (db *DB) BackupTarGZ(w io.Writer) error {
 }
 
 // Close releases all db resources.
+// Close 释放所有DB资源
 func (db *DB) Close() error {
+	// 写锁
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	// 判断数据库是否关闭
 	if db.closed {
 		return ErrDBClosed
 	}
 
+	// 数据库关闭标识
 	db.closed = true
 
+	// 释放数据库资源
 	err := db.release()
 	if err != nil {
 		return err
@@ -180,6 +228,7 @@ func (db *DB) Close() error {
 }
 
 // release set all obj in the db instance to nil
+// release 将数据库实例中的所有对象置空
 func (db *DB) release() error {
 	GCEnable := db.opt.GCWhenClose
 
