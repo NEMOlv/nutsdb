@@ -73,6 +73,9 @@ type Options struct {
 	// SyncEnable represents if call Sync() function.
 	// if SyncEnable is false, high write performance but potential data loss likely.
 	// if SyncEnable is true, slower but persistent.
+	// SyncEnable 代表是否调用Sync()
+	// 如果 SyncEnable 为false，高写性能但可能导致数据丢失
+	// 如果 SyncEnable 为true，较慢但数据持久化
 	SyncEnable bool
 
 	// MaxFdNumsInCache represents the max numbers of fd in cache.

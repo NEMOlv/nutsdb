@@ -200,10 +200,13 @@ func (e *Entry) isFilter() bool {
 }
 
 // valid check the entry fields valid or not
+// valid 检查键值对是否有效
 func (e *Entry) valid() error {
+	// 如果key为空,返回key为空的错误
 	if len(e.Key) == 0 {
 		return ErrKeyEmpty
 	}
+	// 如果key或value超过最大值发明会数据大小超越的错误
 	if len(e.Key) > MAX_SIZE || len(e.Value) > MAX_SIZE {
 		return ErrDataSizeExceed
 	}

@@ -52,20 +52,25 @@ func newPendingEntriesList() *pendingEntryList {
 }
 
 // submitEntry submit an entry into pendingEntryList
+// submitEntry 将键值对提交进待写数组
 func (pending *pendingEntryList) submitEntry(ds Ds, bucket string, e *Entry) {
 	switch ds {
 	case DataStructureBTree:
+		// 如果桶在BTree中不存在,则新建一个
 		if _, exist := pending.entriesInBTree[bucket]; !exist {
 			pending.entriesInBTree[bucket] = map[string]*Entry{}
 		}
+		// 如果Key在桶中不存在则新建一个相关记录
 		if _, exist := pending.entriesInBTree[bucket][string(e.Key)]; !exist {
 			pending.entriesInBTree[bucket][string(e.Key)] = e
 			pending.size++
 		}
 	default:
+		//如果ds数据结构在待写数据中不存在,则新建一个
 		if _, exist := pending.entries[ds]; !exist {
 			pending.entries[ds] = map[BucketName][]*Entry{}
 		}
+		// 获取根据ds数据结构+bucket桶名获取数据数据,将数据添加进数据数组中
 		entries := pending.entries[ds][bucket]
 		entries = append(entries, e)
 		pending.entries[ds][bucket] = entries
