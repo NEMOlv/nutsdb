@@ -324,6 +324,7 @@ type EntryWhenRecovery struct {
 	off int64
 }
 
+// dataInTx 事务中的数据？
 type dataInTx struct {
 	es       []*EntryWhenRecovery
 	txId     uint64

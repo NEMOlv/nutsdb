@@ -27,45 +27,76 @@ import (
 
 const (
 	// txStatusRunning means the tx is running
+	// 代表事务正在执行
 	txStatusRunning = 1
 	// txStatusCommitting means the tx is committing
+	// 代表事务正在提交
 	txStatusCommitting = 2
 	// txStatusClosed means the tx is closed, ether committed or rollback
+	// 代表事务已关闭，可能是提交结束也可能是回滚
 	txStatusClosed = 3
 )
 
 // Tx represents a transaction.
+// Tx 代表事务
 type Tx struct {
-	id                uint64
-	db                *DB
-	writable          bool
-	status            atomic.Value
-	pendingWrites     *pendingEntryList
-	size              int64
+	// 文件ID
+	id uint64
+	// 数据库实例
+	db *DB
+	// 是否写事务
+	writable bool
+	// 事务状态
+	status atomic.Value
+	// 待写键值对数组
+	pendingWrites *pendingEntryList
+	// 本次事务的数据大小
+	size int64
+	// 待写Bucket数组
 	pendingBucketList pendingBucketList
 }
 
+// txnCb 事务回调结构体
+//
+//	txn: Transaction
+//	Cb:	 Callback
 type txnCb struct {
+	// 提交事务
 	commit func() error
-	user   func(error)
-	err    error
+	// 用于在事务完成后执行用户自定义的逻辑
+	user func(error)
+	// 错误
+	err error
 }
 
+// submitEntry 提交键值对
+// 入参：
+//
+//	ds：数据结构类型
+//	bucket：桶名
+//	e：键值对
 func (tx *Tx) submitEntry(ds uint16, bucket string, e *Entry) {
+	// 将键值对暂写进待写键值对数组
 	tx.pendingWrites.submitEntry(ds, bucket, e)
 }
 
+// runTxnCallback: 执行事务回调
 func runTxnCallback(cb *txnCb) {
 	switch {
+	// 如果事务回调结构体为空，则返回
 	case cb == nil:
 		panic("tx callback is nil")
+	//	如果事务回调结构体中的user自定义函数为空，一定是捕捉到了 tx.CommitWith 的回调为空
 	case cb.user == nil:
 		panic("Must have caught a nil callback for tx.CommitWith")
+	//	如果事务回调结构体中的err不为空，则使用自定义user函数处理该err
 	case cb.err != nil:
 		cb.user(cb.err)
+	//	如果事务回调结构体中的commit不为空，执行提交，如果有错误，则使用自定义user函数处理该err
 	case cb.commit != nil:
 		err := cb.commit()
 		cb.user(err)
+	//	默认情况下，传入一个nil值给自定义user函数
 	default:
 		cb.user(nil)
 	}
@@ -77,27 +108,42 @@ func runTxnCallback(cb *txnCb) {
 // transactions while another one is in progress will result in blocking until
 // the current read/write transaction is completed.
 // All transactions must be closed by calling Commit() or Rollback() when done.
+// Begin 打开一个新事务
+// 只读事务可以同时打开多个，读写事务同时只能打开一个
+// 当尝试打开一个读写事务时，其他进程中的事务将会被阻塞，直到当前读写事务完成
+// 所有事务结束时必须通过调用提交函数或回滚函数关闭
 func (db *DB) Begin(writable bool) (tx *Tx, err error) {
+	// 打开新事务
 	tx, err = newTx(db, writable)
 	if err != nil {
 		return nil, err
 	}
 
+	// 事务获取锁
 	tx.lock()
+	// 事务设置为执行状态
 	tx.setStatusRunning()
+	// 如果数据库关闭了
 	if db.closed {
+		// 事务释放锁
 		tx.unlock()
+		// 事务设置为关闭状态
 		tx.setStatusClosed()
+		// 返回nil,事务关闭错误
 		return nil, ErrDBClosed
 	}
 
+	// 返回事务Tx,nil
 	return
 }
 
 // newTx returns a newly initialized Tx object at given writable.
+// newTx 返回一个新初始化的事务Tx实例
 func newTx(db *DB, writable bool) (tx *Tx, err error) {
+	// 声明事务ID
 	var txID uint64
 
+	// 创建事务
 	tx = &Tx{
 		db:                db,
 		writable:          writable,
@@ -641,36 +687,42 @@ func (tx *Tx) putDeleteLog(bucketId BucketId, key, value []byte, ttl uint32, fla
 }
 
 // setStatusCommitting will change the tx status to txStatusCommitting
+// setStatusCommitting 将Tx修改为提交状态
 func (tx *Tx) setStatusCommitting() {
 	status := txStatusCommitting
 	tx.status.Store(status)
 }
 
 // setStatusClosed will change the tx status to txStatusClosed
+// setStatusClosed 将Tx修改为关闭状态
 func (tx *Tx) setStatusClosed() {
 	status := txStatusClosed
 	tx.status.Store(status)
 }
 
 // setStatusRunning will change the tx status to txStatusRunning
+// setStatusRunning 将Tx修改为执行状态
 func (tx *Tx) setStatusRunning() {
 	status := txStatusRunning
 	tx.status.Store(status)
 }
 
 // isRunning will check if the tx status is txStatusRunning
+// isRunning 检查Tx是否处于执行状态
 func (tx *Tx) isRunning() bool {
 	status := tx.status.Load().(int)
 	return status == txStatusRunning
 }
 
 // isCommitting will check if the tx status is txStatusCommitting
+// isCommitting 检查Tx是否处于提交状态
 func (tx *Tx) isCommitting() bool {
 	status := tx.status.Load().(int)
 	return status == txStatusCommitting
 }
 
 // isClosed will check if the tx status is txStatusClosed
+// isClosed 检查Tx是否处于关闭状态
 func (tx *Tx) isClosed() bool {
 	status := tx.status.Load().(int)
 	return status == txStatusClosed

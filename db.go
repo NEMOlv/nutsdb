@@ -230,38 +230,47 @@ func (db *DB) Close() error {
 // release set all obj in the db instance to nil
 // release 将数据库实例中的所有对象置空
 func (db *DB) release() error {
+	// 是否启动GC
 	GCEnable := db.opt.GCWhenClose
 
+	// 释放活跃文件的读写管理器
 	err := db.ActiveFile.rwManager.Release()
 	if err != nil {
 		return err
 	}
 
+	// 索引置空
 	db.Index = nil
 
+	// 活跃文件置空
 	db.ActiveFile = nil
 
+	// 关闭文件管理器
 	err = db.fm.close()
-
 	if err != nil {
 		return err
 	}
 
+	// 向mergeWorkCloseCh通道发送一个空结构体，应该是代表关闭
 	db.mergeWorkCloseCh <- struct{}{}
 
+	// 如果文件锁是锁定状态，则返回ErrDirUnlocked
 	if !db.flock.Locked() {
 		return ErrDirUnlocked
 	}
-
+	// 释放文件锁
 	err = db.flock.Unlock()
 	if err != nil {
 		return err
 	}
 
+	// 文件管理器置空
 	db.fm = nil
 
+	// 关闭事务管理器
 	db.tm.close()
 
+	// 如果开启GC则执行GC操作
 	if GCEnable {
 		runtime.GC()
 	}
@@ -269,27 +278,35 @@ func (db *DB) release() error {
 	return nil
 }
 
+// getValueByRecord 从记录中获取值
 func (db *DB) getValueByRecord(record *Record) ([]byte, error) {
+	// 如果记录为空，则返回 nil, ErrRecordIsNil
 	if record == nil {
 		return nil, ErrRecordIsNil
 	}
 
+	// 如果记录的值不为空，则返回 记录的值,nil
 	if record.Value != nil {
 		return record.Value, nil
 	}
 
 	// firstly we find data in cache
+	// 首先我们从缓存中查找数据
 	if db.getHintKeyAndRAMIdxCacheSize() > 0 {
 		if value := db.hintKeyAndRAMIdxModeLru.Get(record); value != nil {
 			return value.(*Entry).Value, nil
 		}
 	}
 
+	// 通过文件ID和数据库目录获得文件的全路径
 	dirPath := getDataPath(record.FileID, db.opt.Dir)
+	// 根据dirPath获取数据文件
 	df, err := db.fm.getDataFile(dirPath, db.opt.SegmentSize)
 	if err != nil {
 		return nil, err
 	}
+
+	// defer释放读写管理器rwManager
 	defer func(rwManager RWManager) {
 		err := rwManager.Release()
 		if err != nil {
@@ -297,30 +314,39 @@ func (db *DB) getValueByRecord(record *Record) ([]byte, error) {
 		}
 	}(df.rwManager)
 
+	// payloadSize = KeySize+ValueSize
 	payloadSize := int64(len(record.Key)) + int64(record.ValueSize)
+	// 调用df.ReadEntry方法，传入记录写入偏移和有效数据大小，获取记录的值
 	item, err := df.ReadEntry(int(record.DataPos), payloadSize)
 	if err != nil {
 		return nil, fmt.Errorf("read err. pos %d, key %s, err %s", record.DataPos, record.Key, err)
 	}
 
 	// saved in cache
+	// 将值放入缓存
 	if db.getHintKeyAndRAMIdxCacheSize() > 0 {
 		db.hintKeyAndRAMIdxModeLru.Add(record, item)
 	}
 
+	// 返回记录的值
 	return item.Value, nil
 }
 
-func (db *DB) commitTransaction(tx *Tx) error {
-	var err error
+// commitTransaction 提交事务
+func (db *DB) commitTransaction(tx *Tx) (err error) {
+	// defer后处理
 	defer func() {
 		var panicked bool
+		// 如果发生崩溃，通过执行recover()捕获异常并继续执行
 		if r := recover(); r != nil {
 			// resume normal execution
+			// 恢复正常执行
 			panicked = true
 		}
+		// 如果 panicked 或 err 不为空，则执行回滚
 		if panicked || err != nil {
 			// log.Fatal("panicked=", panicked, ", err=", err)
+			// 日志记录崩溃和错误
 			if errRollback := tx.Rollback(); errRollback != nil {
 				err = errRollback
 			}
@@ -328,23 +354,25 @@ func (db *DB) commitTransaction(tx *Tx) error {
 	}()
 
 	// commit current tx
+	// 提交当前事务
 	tx.lock()
 	tx.setStatusRunning()
-	err = tx.Commit()
-	if err != nil {
+	if err = tx.Commit(); err != nil {
 		// log.Fatal("txCommit fail,err=", err)
-		return err
+		return
 	}
 
-	return err
+	return
 }
 
-func (db *DB) writeRequests(reqs []*request) error {
-	var err error
+// writeRequests 写请求
+func (db *DB) writeRequests(reqs []*request) (err error) {
+	// 如果请求为空, 则返回nil
 	if len(reqs) == 0 {
-		return nil
+		return
 	}
 
+	// 声明一个内部函数done, 入参为错误变量err, 在函数体内循环请求reqs，将err赋予每个请求
 	done := func(err error) {
 		for _, r := range reqs {
 			r.Err = err
@@ -352,6 +380,7 @@ func (db *DB) writeRequests(reqs []*request) error {
 		}
 	}
 
+	// 循环每一个请求，并对每一个请求调用事务，然后用db提交事务，如果cerr不为空，则将其赋予err
 	for _, req := range reqs {
 		tx := req.tx
 		cerr := db.commitTransaction(tx)
@@ -360,56 +389,82 @@ func (db *DB) writeRequests(reqs []*request) error {
 		}
 	}
 
+	// 处理err
 	done(err)
-	return err
+
+	return
 }
 
 // MaxBatchCount returns max possible entries in batch
+// getMaxBatchCount 返回batch中可能的最大条目数
 func (db *DB) getMaxBatchCount() int64 {
 	return db.opt.MaxBatchCount
 }
 
 // MaxBatchSize returns max possible batch size
+// getMaxBatchSize 返回batch可能的最大大小
 func (db *DB) getMaxBatchSize() int64 {
 	return db.opt.MaxBatchSize
 }
 
+// getMaxWriteRecordCount 返回最大写入数量
 func (db *DB) getMaxWriteRecordCount() int64 {
 	return db.opt.MaxWriteRecordCount
 }
 
+// getHintKeyAndRAMIdxCacheSize 返回HintKey和RAMIdx的缓存大小
 func (db *DB) getHintKeyAndRAMIdxCacheSize() int {
 	return db.opt.HintKeyAndRAMIdxCacheSize
 }
 
+// doWrites 执行写入
 func (db *DB) doWrites() {
+	// 感觉这里通道的作用像锁的作用
+	// 等待通道，通道大小为1
 	pendingCh := make(chan struct{}, 1)
+	// 声明内部函数writeRequests, 入参为请求reqs, 尝试执行writeRequests，如果出现错误则日志记录
+	// 如果内部发生多次错误，只会记录并返回最后一次错误
 	writeRequests := func(reqs []*request) {
 		if err := db.writeRequests(reqs); err != nil {
 			log.Fatal("writeRequests fail, err=", err)
 		}
+		// 无论是否成功，均从等待通道中读出数据，相当于释放锁
 		<-pendingCh
 	}
 
+	// 声明reqs数组，初始化长度为0，容量为10
 	reqs := make([]*request, 0, 10)
+	// 声明当前请求指针
 	var r *request
+	// 声明ok变量
 	var ok bool
+
 	for {
+		// 从db.writeCh通道读出数据，如果读不出数据，则跳转到closedCase代码块
 		r, ok = <-db.writeCh
 		if !ok {
 			goto closedCase
 		}
 
+		// 整体逻辑流程是以下三个步骤的循环：
+		//		pendingCh获取锁，并对reqs数组进行写入。
+		//		执行写入操作时，不断从写入通道writeCh获取请求指针，并将请求指针添加进reqs数组。
+		//		当上一轮写入操作结束后，pendingCh释放锁。
 		for {
+			// 将当前请求指针添加进reqs数组
 			reqs = append(reqs, r)
 
+			// 如果reqs数组长度大于3倍的KvWriteCh通道容量，则
 			if len(reqs) >= 3*KvWriteChCapacity {
-				pendingCh <- struct{}{} // blocking.
+				// blocking
+				// 进行阻塞，相当于获取锁，然后跳转writeCase
+				pendingCh <- struct{}{}
 				goto writeCase
 			}
 
 			select {
 			// Either push to pending, or continue to pick from writeCh.
+			// 要么阻塞pendingCh通道并跳转writeCase，要么从writeCh通道中读取数据，如果通道被关闭，则跳转closedCase
 			case r, ok = <-db.writeCh:
 				if !ok {
 					goto closedCase
@@ -422,7 +477,10 @@ func (db *DB) doWrites() {
 	closedCase:
 		// All the pending request are drained.
 		// Don't close the writeCh, because it has be used in several places.
+		// 所有待处理请求都已耗尽。
+		// 不要关闭 writeCh，因为它可以在多个地方使用。
 		for {
+			// 确保所有写请求都已经添加到reqs数组，当写通道writeCh无法再读出数据时，执行最后一次写入，并结束doWrites的执行
 			select {
 			case r = <-db.writeCh:
 				reqs = append(reqs, r)
@@ -434,14 +492,18 @@ func (db *DB) doWrites() {
 		}
 
 	writeCase:
+		// 启动其他协程执行writeRequests，执行完毕后重置reqs数组
 		go writeRequests(reqs)
 		reqs = make([]*request, 0, 10)
 	}
 }
 
 // setActiveFile sets the ActiveFile (DataFile object).
+// setActiveFile 设置活跃文件
 func (db *DB) setActiveFile() (err error) {
+	// 通过最大文件ID和数据库目录获得活跃文件的全路径
 	activeFilePath := getDataPath(db.MaxFileID, db.opt.Dir)
+	// 获取活跃文件
 	db.ActiveFile, err = db.fm.getDataFile(activeFilePath, db.opt.SegmentSize)
 	if err != nil {
 		return
@@ -449,59 +511,78 @@ func (db *DB) setActiveFile() (err error) {
 
 	db.ActiveFile.fileID = db.MaxFileID
 
-	return nil
+	return
 }
 
 // getMaxFileIDAndFileIds returns max fileId and fileIds.
+// getMaxFileIDAndFileIds 返回最大文件ID和文件ID数组
 func (db *DB) getMaxFileIDAndFileIDs() (maxFileID int64, dataFileIds []int) {
+	// 从数据库目录中获取所有文件
 	files, _ := os.ReadDir(db.opt.Dir)
 
+	// 如果文件数组为空，则返回0, nil
 	if len(files) == 0 {
 		return 0, nil
 	}
 
+	// 循环获取单个文件
 	for _, file := range files {
+		// 获取文件名
 		filename := file.Name()
+		// 获取文件后缀
 		fileSuffix := path.Ext(path.Base(filename))
+		// 如果不是数据文件后缀则跳过
 		if fileSuffix != DataSuffix {
 			continue
 		}
-
+		// 去除文件名后缀
 		filename = strings.TrimSuffix(filename, DataSuffix)
+		// 将文件名从string转为int
 		id, _ := strconv2.StrToInt(filename)
+		// 并添加进文件ID数组
 		dataFileIds = append(dataFileIds, id)
 	}
 
+	// 如果文件名数组为空，则返回0, nil
 	if len(dataFileIds) == 0 {
 		return 0, nil
 	}
 
+	// 对文件数组排序
 	sort.Ints(dataFileIds)
+	// 获得最大文件ID
 	maxFileID = int64(dataFileIds[len(dataFileIds)-1])
 
 	return
 }
 
+// parseDataFiles 解析数据文件
 func (db *DB) parseDataFiles(dataFileIds []int) (err error) {
 	var (
-		off      int64
-		f        *fileRecovery
-		fID      int64
+		// 写入偏移
+		off int64
+		// todo 文件恢复结构体？
+		f *fileRecovery
+		// 文件ID
+		fID int64
+		// todo 事务中的数据？
 		dataInTx dataInTx
 	)
 
+	// 解析事务中的数据
 	parseDataInTx := func() error {
 		for _, entry := range dataInTx.es {
 			// if this bucket is not existed in bucket manager right now
 			// its because it already deleted in the feature WAL log.
 			// so we can just ignore here.
+			// 如果这个bucket当前不存在bucket管理器，是因为它已经在未来的预写日志中被删除了
 			bucketId := entry.Meta.BucketId
 			if _, err := db.bm.GetBucketById(bucketId); errors.Is(err, ErrBucketNotExist) {
 				continue
 			}
-
+			// 使用文件ID和写入偏移，从Mode中创建Record
 			record := db.createRecordByModeWithFidAndOff(entry.fid, uint64(entry.off), &entry.Entry)
-
+			// 重建索引
 			if err = db.buildIdxes(record, &entry.Entry); err != nil {
 				return err
 			}
@@ -512,11 +593,14 @@ func (db *DB) parseDataFiles(dataFileIds []int) (err error) {
 		return nil
 	}
 
+	// 从文件中读取元素(实际上是在重建内存索引)
 	readEntriesFromFile := func() error {
 		for {
+			// 使用 readEntry方法，传入写入偏移，读取元素
 			entry, err := f.readEntry(off)
 			if err != nil {
 				// whatever which logic branch it will choose, we will release the fd.
+				// 无论选择哪个分支，都将释放fd
 				_ = f.release()
 				if errors.Is(err, io.EOF) || errors.Is(err, ErrIndexOutOfBound) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, ErrEntryZero) || errors.Is(err, ErrHeaderSizeOutOfBounds) {
 					break
@@ -532,19 +616,23 @@ func (db *DB) parseDataFiles(dataFileIds []int) (err error) {
 				break
 			}
 
+			// 恢复时的元素
 			entryWhenRecovery := &EntryWhenRecovery{
 				Entry: *entry,
 				fid:   fID,
 				off:   off,
 			}
+			// 如果dataInTx.txId == 0，则将entryWhenRecovery加入es(entries)数组，并设定起始写入偏移(startOff)
 			if dataInTx.txId == 0 {
 				dataInTx.appendEntry(entryWhenRecovery)
 				dataInTx.txId = entry.Meta.TxID
 				dataInTx.startOff = off
+				//	否则判断entryWhenRecovery是否和dataInTx具有相同的TxID，有则加入es(entries)数组
 			} else if dataInTx.isSameTx(entryWhenRecovery) {
 				dataInTx.appendEntry(entryWhenRecovery)
 			}
 
+			// 如果entry的状态是已提交
 			if entry.Meta.Status == Committed {
 				err := parseDataInTx()
 				if err != nil {
@@ -554,6 +642,8 @@ func (db *DB) parseDataFiles(dataFileIds []int) (err error) {
 				dataInTx.startOff = off
 			}
 
+			// 如果dataInTx和entryWhenRecovery具有不同TxID
+			// 立刻重置dataInTx并将dataInTx.startOff设置为当前写入偏移off
 			if !dataInTx.isSameTx(entryWhenRecovery) {
 				dataInTx.reset()
 				dataInTx.startOff = off
@@ -562,6 +652,7 @@ func (db *DB) parseDataFiles(dataFileIds []int) (err error) {
 			off += entry.Size()
 		}
 
+		// 如果文件ID和最大文件ID相等，则活跃文件的实际大小和写入偏移，均用当前写入偏移表示
 		if fID == db.MaxFileID {
 			db.ActiveFile.ActualSize = off
 			db.ActiveFile.writeOff = off
@@ -570,14 +661,18 @@ func (db *DB) parseDataFiles(dataFileIds []int) (err error) {
 		return nil
 	}
 
+	// 循环获取数据文件ID
 	for _, dataID := range dataFileIds {
 		off = 0
 		fID = int64(dataID)
+		// 拼接全路径
 		dataPath := getDataPath(fID, db.opt.Dir)
+		// 新建FileRecovery结构体，传入全路径和结构体的BufferSize
 		f, err = newFileRecovery(dataPath, db.opt.BufferSizeOfRecovery)
 		if err != nil {
 			return err
 		}
+		// 从文件中读取元素(实际上是在重建内存索引)
 		err := readEntriesFromFile()
 		if err != nil {
 			return err
@@ -585,19 +680,24 @@ func (db *DB) parseDataFiles(dataFileIds []int) (err error) {
 	}
 
 	// compute the valid record count and save it in db.RecordCount
+	// 计算有效记录数并将其保存至db.RecordCount
 	db.RecordCount, err = db.getRecordCount()
 	return
 }
 
+// getRecordCount 计算有效记录数
 func (db *DB) getRecordCount() (int64, error) {
 	var res int64
 
 	// Iterate through the BTree indices
+	// 迭代BTree索引
+	// db.Index.bTree.idx是一个map，实际上循环就是在循环map中的所有BTree
 	for _, btree := range db.Index.bTree.idx {
 		res += int64(btree.Count())
 	}
 
 	// Iterate through the List indices
+	// 迭代List索引
 	for _, listItem := range db.Index.list.idx {
 		for key := range listItem.Items {
 			curLen, err := listItem.Size(key)
@@ -609,6 +709,7 @@ func (db *DB) getRecordCount() (int64, error) {
 	}
 
 	// Iterate through the Set indices
+	// 迭代Set索引
 	for _, setItem := range db.Index.set.idx {
 		for key := range setItem.M {
 			res += int64(setItem.SCard(key))
@@ -616,6 +717,7 @@ func (db *DB) getRecordCount() (int64, error) {
 	}
 
 	// Iterate through the SortedSet indices
+	// 迭代SortedSet索引
 	for _, zsetItem := range db.Index.sortedSet.idx {
 		for key := range zsetItem.M {
 			curLen, err := zsetItem.ZCard(key)
@@ -629,21 +731,28 @@ func (db *DB) getRecordCount() (int64, error) {
 	return res, nil
 }
 
+// buildBTreeIdx 重建BTree内存索引
 func (db *DB) buildBTreeIdx(record *Record, entry *Entry) error {
+	// 获取元素的key和元数据
 	key, meta := entry.Key, entry.Meta
 
+	// 获取bucket
 	bucket, err := db.bm.GetBucketById(meta.BucketId)
 	if err != nil {
 		return err
 	}
 	bucketId := bucket.Id
 
+	// 获取BTree
 	bTree := db.Index.bTree.getWithDefault(bucketId)
 
+	// 如果记录过期 或 该数据被删除，则删除从 生命周期管理器 和 BTree 中删除数据
 	if record.IsExpired() || meta.Flag == DataDeleteFlag {
 		db.tm.del(bucketId, string(key))
 		bTree.Delete(key)
 	} else {
+		// 如果数据不是持久化的，则放入生命周期管理器，否则从生命周期管理器中删除
+		// 将数据插入BTree
 		if meta.TTL != Persistent {
 			db.tm.add(bucketId, string(key), db.expireTime(meta.Timestamp, meta.TTL), db.buildExpireCallback(bucket.Name, key))
 		} else {
@@ -654,6 +763,7 @@ func (db *DB) buildBTreeIdx(record *Record, entry *Entry) error {
 	return nil
 }
 
+// expireTime 过期时间 = 创建时间+生命周期-当前时间
 func (db *DB) expireTime(timestamp uint64, ttl uint32) time.Duration {
 	now := time.UnixMilli(time.Now().UnixMilli())
 	expireTime := time.UnixMilli(int64(timestamp))
@@ -661,8 +771,11 @@ func (db *DB) expireTime(timestamp uint64, ttl uint32) time.Duration {
 	return expireTime.Sub(now)
 }
 
+// buildIdxes 重建索引
 func (db *DB) buildIdxes(record *Record, entry *Entry) error {
+	// 获取元数据
 	meta := entry.Meta
+	// 根据元素使用的数据结构，选择不同的重建内存索引方式
 	switch meta.Ds {
 	case DataStructureBTree:
 		return db.buildBTreeIdx(record, entry)
@@ -684,6 +797,7 @@ func (db *DB) buildIdxes(record *Record, entry *Entry) error {
 	return nil
 }
 
+// deleteBucket 删除bucket
 func (db *DB) deleteBucket(ds uint16, bucket BucketId) {
 	if ds == DataStructureSet {
 		db.Index.set.delete(bucket)
@@ -700,6 +814,7 @@ func (db *DB) deleteBucket(ds uint16, bucket BucketId) {
 }
 
 // buildSetIdx builds set index when opening the DB.
+// buildSetIdx 在打开DB时重建set的索引
 func (db *DB) buildSetIdx(record *Record, entry *Entry) error {
 	key, val, meta := entry.Key, entry.Value, entry.Meta
 
@@ -726,6 +841,7 @@ func (db *DB) buildSetIdx(record *Record, entry *Entry) error {
 }
 
 // buildSortedSetIdx builds sorted set index when opening the DB.
+// buildSortedSetIdx 在打开DB时重建 sorted set 的索引
 func (db *DB) buildSortedSetIdx(record *Record, entry *Entry) error {
 	key, val, meta := entry.Key, entry.Value, entry.Meta
 
@@ -765,6 +881,7 @@ func (db *DB) buildSortedSetIdx(record *Record, entry *Entry) error {
 }
 
 // buildListIdx builds List index when opening the DB.
+// buildListIdx 在打开DB时重建List的索引
 func (db *DB) buildListIdx(record *Record, entry *Entry) error {
 	key, val, meta := entry.Key, entry.Value, entry.Meta
 
@@ -825,6 +942,7 @@ func (db *DB) buildListLRemIdx(value []byte, l *List, key []byte) error {
 }
 
 // buildIndexes builds indexes when db initialize resource.
+// buildIndexes 在初始化DB资源时重建索引
 func (db *DB) buildIndexes() (err error) {
 	var (
 		maxFileID   int64
@@ -849,6 +967,7 @@ func (db *DB) buildIndexes() (err error) {
 	return db.parseDataFiles(dataFileIds)
 }
 
+// createRecordByModeWithFidAndOff 携带文件ID和写入偏移通过Mode创建记录
 func (db *DB) createRecordByModeWithFidAndOff(fid int64, off uint64, entry *Entry) *Record {
 	record := NewRecord()
 
@@ -857,10 +976,11 @@ func (db *DB) createRecordByModeWithFidAndOff(fid int64, off uint64, entry *Entr
 		WithTTL(entry.Meta.TTL).
 		WithTxID(entry.Meta.TxID)
 
+	// 如果元素的索引模式为HintKeyValAndRAMIdxMode，则添加value
 	if db.opt.EntryIdxMode == HintKeyValAndRAMIdxMode {
 		record.WithValue(entry.Value)
 	}
-
+	// 如果元素的索引模式为HintKeyAndRAMIdxMode，则添加文件ID、写入偏移、value_size
 	if db.opt.EntryIdxMode == HintKeyAndRAMIdxMode {
 		record.WithFileId(fid).
 			WithDataPos(off).
@@ -871,26 +991,37 @@ func (db *DB) createRecordByModeWithFidAndOff(fid int64, off uint64, entry *Entr
 }
 
 // managed calls a block of code that is fully contained in a transaction.
+// managed 调用完全包含在事务中的代码块。
+// 入参：
+//
+//	writable：是否写入，默认写入
+//	fn：事务处理函数
 func (db *DB) managed(writable bool, fn func(tx *Tx) error) (err error) {
+	// 声明事务
 	var tx *Tx
 
-	tx, err = db.Begin(writable)
-	if err != nil {
+	// 开启事务
+	if tx, err = db.Begin(writable); err != nil {
 		return err
 	}
+
+	// 后处理：如果发生panic则使用recover恢复并记录崩溃原因
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic when executing tx, err is %+v", r)
 		}
 	}()
 
+	// fn处理事务，没有错误则提交，否则回滚
 	if err = fn(tx); err == nil {
+		// 执行提交
 		err = tx.Commit()
 	} else {
+		//如果错误处理器部位空则捕获错误
 		if db.opt.ErrorHandler != nil {
 			db.opt.ErrorHandler.HandleError(err)
 		}
-
+		// 执行回滚
 		if errRollback := tx.Rollback(); errRollback != nil {
 			err = fmt.Errorf("%v. Rollback err: %v", err, errRollback)
 		}
@@ -899,16 +1030,21 @@ func (db *DB) managed(writable bool, fn func(tx *Tx) error) (err error) {
 	return err
 }
 
+// sendToWriteCh 发送至写入通道
 func (db *DB) sendToWriteCh(tx *Tx) (*request, error) {
+	// 从缓冲池中获取缓冲变量并重置
 	req := requestPool.Get().(*request)
 	req.reset()
 	req.Wg.Add(1)
 	req.tx = tx
-	req.IncrRef()     // for db write
-	db.writeCh <- req // Handled in doWrites.
+	req.IncrRef() // for db write
+	// Handled in doWrites.
+	// 在doWrites中处理
+	db.writeCh <- req
 	return req, nil
 }
 
+// checkListExpired 检查List元素是否过期
 func (db *DB) checkListExpired() {
 	db.Index.list.rangeIdx(func(l *List) {
 		for key := range l.TTL {
@@ -918,12 +1054,15 @@ func (db *DB) checkListExpired() {
 }
 
 // IsClose return the value that represents the status of DB
+// IsClose 返回一个代表DB状态的值
 func (db *DB) IsClose() bool {
 	return db.closed
 }
 
+// buildExpireCallback 构建过期回调函数
 func (db *DB) buildExpireCallback(bucket string, key []byte) func() {
 	return func() {
+		// 调用 db.Update 方法：
 		err := db.Update(func(tx *Tx) error {
 			b, err := tx.db.bm.GetBucket(DataStructureBTree, bucket)
 			if err != nil {
@@ -941,18 +1080,24 @@ func (db *DB) buildExpireCallback(bucket string, key []byte) func() {
 	}
 }
 
+// rebuildBucketManager 重建bucket管理器
 func (db *DB) rebuildBucketManager() error {
+	// 构建bucket全路径
 	bucketFilePath := db.opt.Dir + "/" + BucketStoreFileName
+	// 打开bucket文件
 	f, err := newFileRecovery(bucketFilePath, db.opt.BufferSizeOfRecovery)
 	if err != nil {
 		return nil
 	}
+	// 创建bucketRequest数组
 	bucketRequest := make([]*bucketSubmitRequest, 0)
 
 	for {
+		// 从bucket文件中读取bucket
 		bucket, err := f.readBucket()
 		if err != nil {
 			// whatever which logic branch it will choose, we will release the fd.
+			// 无论选择哪个逻辑分支，我们都要释放文件资源
 			_ = f.release()
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				break
@@ -960,13 +1105,14 @@ func (db *DB) rebuildBucketManager() error {
 				return err
 			}
 		}
+		// 将bucket包装成bucketSubmitRequest，并添加进bucketRequest数组
 		bucketRequest = append(bucketRequest, &bucketSubmitRequest{
 			ds:     bucket.Ds,
 			name:   BucketName(bucket.Name),
 			bucket: bucket,
 		})
 	}
-
+	// todo 不是很理解
 	if len(bucketRequest) > 0 {
 		err = db.bm.SubmitPendingBucketChange(bucketRequest)
 		if err != nil {
