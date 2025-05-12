@@ -776,7 +776,7 @@ func (tx *Tx) put(bucket string, key, value []byte, ttl uint32, flag uint16, tim
 }
 
 // putDeleteLog 将数据写入删除日志
-// todo 暂时没看出和一般的写入有什么区别
+// todo 减少了一些事务和桶的校验
 func (tx *Tx) putDeleteLog(bucketId BucketId, key, value []byte, ttl uint32, flag uint16, timestamp uint64, ds uint16) {
 	bucket, err := tx.db.bm.GetBucketById(bucketId)
 	if err != nil {

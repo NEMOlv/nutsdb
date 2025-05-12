@@ -88,15 +88,20 @@ func (tx *Tx) PutIfExists(bucket string, key, value []byte, ttl uint32) error {
 
 // Get retrieves the value for a key in the bucket.
 // The returned value is only valid for the life of the transaction.
+// Get 检索桶中某个键的值
+// 返回值仅在事务生命周期内有效。
 func (tx *Tx) Get(bucket string, key []byte) (value []byte, err error) {
 	return tx.get(bucket, key)
 }
 
+// get 检索桶中某个键的值
 func (tx *Tx) get(bucket string, key []byte) (value []byte, err error) {
+	// 检查事务是否关闭
 	if err := tx.checkTxIsClosed(); err != nil {
 		return nil, err
 	}
 
+	// 获取桶
 	b, err := tx.db.bm.GetBucket(DataStructureBTree, bucket)
 	if err != nil {
 		return nil, err
@@ -108,8 +113,10 @@ func (tx *Tx) get(bucket string, key []byte) (value []byte, err error) {
 		return nil, ErrBucketNotFound
 	}
 
+	// 如果当前事务是读写事务，则尝试从pendingWrite中获取数据
 	status, entry := tx.findEntryAndItsStatus(DataStructureBTree, bucket, string(key))
 	if status != NotFoundEntry && entry != nil {
+		// 如果数据已被删除返回nil，否则返回value
 		if status == EntryDeleted {
 			return nil, ErrKeyNotFound
 		} else {
@@ -117,80 +124,93 @@ func (tx *Tx) get(bucket string, key []byte) (value []byte, err error) {
 		}
 	}
 
-	if idx, ok := tx.db.Index.bTree.exist(bucketId); ok {
-		record, found := idx.Find(key)
-		if !found {
-			return nil, ErrKeyNotFound
-		}
-
-		if record.IsExpired() {
-			tx.putDeleteLog(bucketId, key, nil, Persistent, DataDeleteFlag, uint64(time.Now().Unix()), DataStructureBTree)
-			return nil, ErrNotFoundKey
-		}
-
-		value, err = tx.db.getValueByRecord(record)
-		if err != nil {
-			return nil, err
-		}
-		return value, nil
-
-	} else {
+	// 获取内存索引（桶），如果内存索引（桶）不存在则返回nil,ErrNotFoundBucket
+	idx, bucketExists := tx.db.Index.bTree.exist(bucketId)
+	if !bucketExists {
 		return nil, ErrNotFoundBucket
 	}
+
+	// 从内存索引（桶）中获取记录record
+	record, found := idx.Find(key)
+	// 如果找不到record则返回nil, ErrKeyNotFound
+	if !found {
+		return nil, ErrKeyNotFound
+	}
+	// 如果记录过期则调用putDeleteLog，返回nil, ErrNotFoundKey
+	if record.IsExpired() {
+		tx.putDeleteLog(bucketId, key, nil, Persistent, DataDeleteFlag, uint64(time.Now().Unix()), DataStructureBTree)
+		return nil, ErrNotFoundKey
+	}
+	// 从磁盘文件上读取key对应的value
+	value, err = tx.db.getValueByRecord(record)
+	if err != nil {
+		return nil, err
+	}
+	return value, nil
 }
 
+// ValueLen 返回值的大小
 func (tx *Tx) ValueLen(bucket string, key []byte) (int, error) {
 	value, err := tx.get(bucket, key)
 	return len(value), err
 }
 
+// 获取最大键
 func (tx *Tx) GetMaxKey(bucket string) ([]byte, error) {
 	return tx.getMaxOrMinKey(bucket, true)
 }
 
+// 获取最小键
 func (tx *Tx) GetMinKey(bucket string) ([]byte, error) {
 	return tx.getMaxOrMinKey(bucket, false)
 }
 
 func (tx *Tx) getMaxOrMinKey(bucket string, isMax bool) ([]byte, error) {
+	// 检查事务是否关闭
 	if err := tx.checkTxIsClosed(); err != nil {
 		return nil, err
 	}
 
+	// 获取桶
 	b, err := tx.db.bm.GetBucket(DataStructureBTree, bucket)
 	if err != nil {
 		return nil, err
 	}
 	bucketId := b.Id
 
-	if idx, ok := tx.db.Index.bTree.exist(bucketId); ok {
-		var (
-			item  *Item
-			found bool
-		)
-
-		if isMax {
-			item, found = idx.Max()
-		} else {
-			item, found = idx.Min()
-		}
-
-		if !found {
-			return nil, ErrKeyNotFound
-		}
-
-		if item.record.IsExpired() {
-			tx.putDeleteLog(bucketId, item.key, nil, Persistent, DataDeleteFlag, uint64(time.Now().Unix()), DataStructureBTree)
-			return nil, ErrNotFoundKey
-		}
-
-		return item.key, nil
-	} else {
+	// 检查桶是否存在
+	idx, bucketExists := tx.db.Index.bTree.exist(bucketId)
+	if !bucketExists {
 		return nil, ErrNotFoundBucket
 	}
+
+	// 通过调用Max或Min函数获取桶中的最大key或最小key，如果不存在则返回nil, ErrKeyNotFound
+	var (
+		item  *Item
+		found bool
+	)
+
+	if isMax {
+		item, found = idx.Max()
+	} else {
+		item, found = idx.Min()
+	}
+
+	if !found {
+		return nil, ErrKeyNotFound
+	}
+
+	// 如果记录过期了，则调用putDeleteLog，并且返回nil, ErrNotFoundKey
+	if item.record.IsExpired() {
+		tx.putDeleteLog(bucketId, item.key, nil, Persistent, DataDeleteFlag, uint64(time.Now().Unix()), DataStructureBTree)
+		return nil, ErrNotFoundKey
+	}
+
+	return item.key, nil
 }
 
-// GetAll returns all keys and values of the bucket stored at given bucket.
+// GetAll returns all keys and values in the given bucket.
+// GetAll 返回给定桶中的所有键和值
 func (tx *Tx) GetAll(bucket string) ([][]byte, [][]byte, error) {
 	return tx.getAllOrKeysOrValues(bucket, getAllType)
 }
