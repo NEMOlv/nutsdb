@@ -68,6 +68,7 @@ func (bt *BTree) Delete(key []byte) bool {
 	return deleted
 }
 
+// All 获取所有数据
 func (bt *BTree) All() []*Record {
 	items := bt.btree.Items()
 

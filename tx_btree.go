@@ -247,6 +247,7 @@ func (tx *Tx) getAllOrKeysOrValues(bucket string, typ uint8) ([][]byte, [][]byte
 		return nil, nil, ErrNotFoundBucket
 	}
 
+	// 获取所有记录
 	records := idx.All()
 
 	var (
@@ -254,6 +255,7 @@ func (tx *Tx) getAllOrKeysOrValues(bucket string, typ uint8) ([][]byte, [][]byte
 		values [][]byte
 	)
 
+	// 根据传入的查询类型，指定不同的参数
 	switch typ {
 	case getAllType:
 		keys, values, err = tx.getHintIdxDataItemsWrapper(records, ScanNoLimit, bucketId, true, true)
