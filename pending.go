@@ -92,6 +92,7 @@ func (p pendingBucketList) rangeBucket(f func(bucket *Bucket) error) error {
 }
 
 // toList collect all the entries in pendingEntryList to a list.
+// toList 将 pendingEntryList 中的所有元素收集到一个列表中。
 func (pending *pendingEntryList) toList() []*Entry {
 	list := make([]*Entry, 0, pending.size)
 	for _, entriesInBucket := range pending.entriesInBTree {

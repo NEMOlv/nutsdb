@@ -246,6 +246,7 @@ func (tx *Tx) getTxID() (id uint64, err error) {
 // 5.释放数据库的锁并清理db字段
 func (tx *Tx) Commit() (err error) {
 	// 后处理
+	// 每个事务的pendingWrites都是独立的
 	defer func() {
 		if err != nil {
 			tx.handleErr(err)

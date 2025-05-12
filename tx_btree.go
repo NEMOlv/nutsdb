@@ -31,34 +31,44 @@ const (
 	getValuesType uint8 = 2
 )
 
-func (tx *Tx) PutWithTimestamp(bucket string, key, value []byte, ttl uint32, timestamp uint64) error {
-	return tx.put(bucket, key, value, ttl, DataSetFlag, timestamp, DataStructureBTree)
-}
-
 // Put sets the value for a key in the bucket.
 // a wrapper of the function put.
+// Put 向桶中插入键值对数据。
 func (tx *Tx) Put(bucket string, key, value []byte, ttl uint32) error {
 	return tx.put(bucket, key, value, ttl, DataSetFlag, uint64(time.Now().UnixMilli()), DataStructureBTree)
 }
 
+// PutWithTimestamp 向桶中插入键值对数据，但需要手动传入Timestamp
+func (tx *Tx) PutWithTimestamp(bucket string, key, value []byte, ttl uint32, timestamp uint64) error {
+	return tx.put(bucket, key, value, ttl, DataSetFlag, timestamp, DataStructureBTree)
+}
+
 // PutIfNotExists set the value for a key in the bucket only if the key doesn't exist already.
+// PutIfNotExists 如果键不存在，向桶中插入键值对数据
 func (tx *Tx) PutIfNotExists(bucket string, key, value []byte, ttl uint32) error {
+	// 这里检查事务是否关闭，是因为内部使用到了tx的db实例
+	// 如果tx已经关闭，那么db实例应该为空
 	if err := tx.checkTxIsClosed(); err != nil {
 		return err
 	}
 
+	// 获取桶
 	b, err := tx.db.bm.GetBucket(DataStructureBTree, bucket)
 	if err != nil {
 		return err
 	}
+	// 获取桶ID
 	bucketId := b.Id
 
+	// 如果桶不存在则返回找不到桶的错误
+	// 实际上每个桶就是一个独立的内存索引
 	idx, bucketExists := tx.db.Index.bTree.exist(bucketId)
 	if !bucketExists {
 		return ErrNotFoundBucket
 	}
+	// 从桶中获取record
 	record, recordExists := idx.Find(key)
-
+	// 如果记录存在，且没有过期，则返回空，也就是不进行插入
 	if recordExists && !record.IsExpired() {
 		return nil
 	}
@@ -66,7 +76,8 @@ func (tx *Tx) PutIfNotExists(bucket string, key, value []byte, ttl uint32) error
 	return tx.put(bucket, key, value, ttl, DataSetFlag, uint64(time.Now().UnixMilli()), DataStructureBTree)
 }
 
-// PutIfExits set the value for a key in the bucket only if the key already exits.
+// PutIfExists set the value for a key in the bucket only if the key already exits.
+// PutIfExists
 func (tx *Tx) PutIfExists(bucket string, key, value []byte, ttl uint32) error {
 	return tx.update(bucket, key, func(_ []byte) ([]byte, error) {
 		return value, nil

@@ -31,20 +31,28 @@ type Record struct {
 }
 
 // IsExpired returns the record if expired or not.
+// IsExpired 返回record是否过期
 func (r *Record) IsExpired() bool {
 	return IsExpired(r.TTL, r.Timestamp)
 }
 
 // IsExpired checks the ttl if expired or not.
+// IsExpired 检查ttl是否过期
 func IsExpired(ttl uint32, timestamp uint64) bool {
+	// 如果ttl是持久化，那么没有过期，返回false
 	if ttl == Persistent {
 		return false
 	}
 
+	// 获取现在的时间
 	now := time.UnixMilli(time.Now().UnixMilli())
+	// 获取时间戳
 	expireTime := time.UnixMilli(int64(timestamp))
+	// 过期时间 = 时间戳+生命周期
 	expireTime = expireTime.Add(time.Duration(ttl) * time.Second)
-
+	// 判断过期时间是否比现在的时间小
+	//		是的话说明过期了，返回true
+	//		否的话说明没过期，返回false
 	return expireTime.Before(now)
 }
 

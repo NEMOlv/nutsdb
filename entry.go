@@ -56,20 +56,27 @@ func (e *Entry) Size() int64 {
 //	|----------------------------------------------------------------------------------------------------------|
 //	| uint32| uint64  |uint32 |  uint32 | uint16  | uint32| uint16 | uint16 |uint64 | uint64 | []byte | []byte |
 //	|----------------------------------------------------------------------------------------------------------|
+//
+// Encode 返回被编码的数组
 func (e *Entry) Encode() []byte {
+	// key和value的大小
 	keySize := e.Meta.KeySize
 	valueSize := e.Meta.ValueSize
 
+	// 创建一个最大头部大小+kv键值对大小的字节数组
 	buf := make([]byte, MaxEntryHeaderSize+keySize+valueSize)
 
+	// 放入头部元数据
 	index := e.setEntryHeaderBuf(buf)
+	// 放入key
 	copy(buf[index:], e.Key)
 	index += int(keySize)
+	// 放入value
 	copy(buf[index:], e.Value)
 	index += int(valueSize)
-
+	// 去除空余部分
 	buf = buf[:index]
-
+	// 计算并放入检验和
 	c32 := crc32.ChecksumIEEE(buf[4:])
 	binary.LittleEndian.PutUint32(buf[0:4], c32)
 
@@ -77,6 +84,7 @@ func (e *Entry) Encode() []byte {
 }
 
 // setEntryHeaderBuf sets the entry header buff.
+// setEntryHeaderBuf 将元素的头部元数据写入buffer
 func (e *Entry) setEntryHeaderBuf(buf []byte) int {
 	index := 4
 
@@ -94,6 +102,7 @@ func (e *Entry) setEntryHeaderBuf(buf []byte) int {
 }
 
 // IsZero checks if the entry is zero or not.
+// IsZero 检查元素是否为空
 func (e *Entry) IsZero() bool {
 	if e.Meta.Crc == 0 && e.Meta.KeySize == 0 && e.Meta.ValueSize == 0 && e.Meta.Timestamp == 0 {
 		return true
@@ -102,6 +111,7 @@ func (e *Entry) IsZero() bool {
 }
 
 // GetCrc returns the crc at given buf slice.
+// GetCrc  todo 返回字节数组的校验和
 func (e *Entry) GetCrc(buf []byte) uint32 {
 	crc := crc32.ChecksumIEEE(buf[4:])
 	crc = crc32.Update(crc, crc32.IEEETable, e.Key)

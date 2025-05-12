@@ -42,6 +42,7 @@ func NewBTree() *BTree {
 	}
 }
 
+// Find 从内存索引中获取key对应的record
 func (bt *BTree) Find(key []byte) (*Record, bool) {
 	item, ok := bt.btree.Get(&Item{key: key})
 	if ok {
@@ -50,6 +51,8 @@ func (bt *BTree) Find(key []byte) (*Record, bool) {
 	return nil, ok
 }
 
+// Insert 将item数据插入内存索引中
+// item数据由key和record组成
 func (bt *BTree) Insert(record *Record) bool {
 	_, replaced := bt.btree.Set(&Item{key: record.Key, record: record})
 	return replaced
