@@ -229,6 +229,7 @@ func (tx *Tx) GetValues(bucket string) ([][]byte, error) {
 	return values, err
 }
 
+// getAllOrKeysOrValues 返回键或值
 func (tx *Tx) getAllOrKeysOrValues(bucket string, typ uint8) ([][]byte, [][]byte, error) {
 	// 检查事务是否关闭
 	if err := tx.checkTxIsClosed(); err != nil {
@@ -272,13 +273,22 @@ func (tx *Tx) getAllOrKeysOrValues(bucket string, typ uint8) ([][]byte, [][]byte
 	return keys, values, nil
 }
 
+// GetSet
+// todo 不知道在干啥
 func (tx *Tx) GetSet(bucket string, key, value []byte) (oldValue []byte, err error) {
-	return oldValue, tx.update(bucket, key, func(b []byte) ([]byte, error) {
-		oldValue = b
-		return value, nil
-	}, func(oldTTL uint32) (uint32, error) {
-		return oldTTL, nil
-	})
+	err = tx.update(
+		bucket,
+		key,
+		func(b []byte) ([]byte, error) {
+			oldValue = b
+			return value, nil
+		},
+		func(oldTTL uint32) (uint32, error) {
+			return oldTTL, nil
+		})
+
+	return
+
 }
 
 // RangeScan query a range at given bucket, start and end slice.
