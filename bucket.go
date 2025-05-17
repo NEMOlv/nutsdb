@@ -80,7 +80,7 @@ func (meta *BucketMeta) Decode(bytes []byte) {
 }
 
 // Encode: Meta | BucketId | Ds | BucketName
-// Encode:
+// Encode: 按照 Meta | BucketId | Ds | BucketName 的格式将数据从string编码为byte数组
 func (b *Bucket) Encode() []byte {
 	entrySize := b.GetEntrySize()
 	buf := make([]byte, entrySize)
