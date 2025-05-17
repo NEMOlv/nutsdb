@@ -85,6 +85,8 @@ func (bt *BTree) AllItems() []*Item {
 	return items
 }
 
+// Range
+// 从start开始排列，小于等于end的key都加入records数组，否则不加入
 func (bt *BTree) Range(start, end []byte) []*Record {
 	records := make([]*Record, 0)
 
@@ -99,14 +101,18 @@ func (bt *BTree) Range(start, end []byte) []*Record {
 	return records
 }
 
+// PrefixScan 前缀扫描
 func (bt *BTree) PrefixScan(prefix []byte, offset, limitNum int) []*Record {
 	records := make([]*Record, 0)
 
+	// 升序遍历
+	// 如果key没有指定前缀，则不加入records数组
 	bt.btree.Ascend(&Item{key: prefix}, func(item *Item) bool {
 		if !bytes.HasPrefix(item.key, prefix) {
 			return false
 		}
 
+		// 前offset个满足条件的key不加入records数组
 		if offset > 0 {
 			offset--
 			return true
@@ -121,21 +127,28 @@ func (bt *BTree) PrefixScan(prefix []byte, offset, limitNum int) []*Record {
 	return records
 }
 
+// PrefixSearchScan
 func (bt *BTree) PrefixSearchScan(prefix []byte, reg string, offset, limitNum int) []*Record {
 	records := make([]*Record, 0)
 
 	rgx := regexp.MustCompile(reg)
 
+	// 升序遍历
+	// 如果key不满足指定前缀则跳过，如果尚未达到偏移位置则跳过，如果不匹配正则表达式则跳过
 	bt.btree.Ascend(&Item{key: prefix}, func(item *Item) bool {
+		// 是否满足前缀，如果key不满足指定前缀则跳过
 		if !bytes.HasPrefix(item.key, prefix) {
 			return false
 		}
 
+		// 是否达到满足前缀的key的偏移位置，如果尚未达到偏移位置则跳过
 		if offset > 0 {
 			offset--
 			return true
 		}
 
+		// 是否匹配正则表达式
+		// 首先去掉前缀，然后进行正则匹配，如果不匹配则跳过
 		if !rgx.Match(bytes.TrimPrefix(item.key, prefix)) {
 			return true
 		}
