@@ -47,6 +47,8 @@ func (fm *FileIORWManager) Sync() (err error) {
 }
 
 // Release is a wrapper around the reduceUsing method
+// Release 是对 reduceUsing 方法的封装
+// todo 释放文件管理器路径?
 func (fm *FileIORWManager) Release() (err error) {
 	fm.fdm.reduceUsing(fm.path)
 	return nil

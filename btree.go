@@ -38,10 +38,13 @@ type BTree struct {
 }
 
 // NewBTree 新建BTree
+
 func NewBTree() *BTree {
 	// 返回BTree
 	return &BTree{
 		btree: btree.NewBTreeG[*Item](func(a, b *Item) bool {
+			//  表示如果 a.key 小于 b.key，则返回 true，否则返回 false。
+			// 这个比较逻辑决定了 B+ 树中元素的存储顺序是按照 Item 的 key 字段从小到大排列的。
 			return bytes.Compare(a.key, b.key) == -1
 		}),
 	}

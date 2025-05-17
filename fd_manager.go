@@ -111,11 +111,15 @@ func (fdm *fdManager) addToCache(fd *os.File, cleanPath string) {
 }
 
 // reduceUsing when RWManager object close, it will go through this method let fdm know it return the fd to cache
+// reduceUsing 当 RWManager 实例关闭时，它会通过此方法让 fdm 知道它将 fd 返回缓存
 func (fdm *fdManager) reduceUsing(path string) {
 	fdm.lock.Lock()
 	defer fdm.lock.Unlock()
+	// 去除路径中的冗余部分，如 . 和 ..，使路径规范化
 	cleanPath := filepath.Clean(path)
+	// 从缓存中获取节点
 	node, isExist := fdm.cache[cleanPath]
+	// 如果节点不在缓存中返回崩溃
 	if !isExist {
 		panic("unexpected the node is not in cache")
 	}

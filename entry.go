@@ -121,6 +121,7 @@ func (e *Entry) GetCrc(buf []byte) uint32 {
 }
 
 // ParsePayload means this function will parse a byte array to bucket, key, size of an entry
+// ParsePayload 该函数将会从字节数组中解析出包括bucket key entry并传入entry
 func (e *Entry) ParsePayload(data []byte) error {
 	meta := e.Meta
 	keyLowBound := 0
@@ -129,14 +130,18 @@ func (e *Entry) ParsePayload(data []byte) error {
 	valueHighBound := meta.KeySize + meta.ValueSize
 
 	// parse key
+	// 解析key
 	e.Key = data[keyLowBound:keyHighBound]
 	// parse value
+	// 解析value
 	e.Value = data[valueLowBound:valueHighBound]
 	return nil
 }
 
 // checkPayloadSize checks the payload size
+// checkPayloadSize 检查有效载荷大小
 func (e *Entry) checkPayloadSize(size int64) error {
+	// 如果元数据中存储的有效载荷大小不等于传入的有效载荷大小,则返回ErrPayLoadSizeMismatch
 	if e.Meta.PayloadSize() != size {
 		return ErrPayLoadSizeMismatch
 	}
@@ -144,6 +149,7 @@ func (e *Entry) checkPayloadSize(size int64) error {
 }
 
 // ParseMeta parse Meta object to entry
+// ParseMeta 从entry中解析出元数据
 func (e *Entry) ParseMeta(buf []byte) (int64, error) {
 	// If the length of the header is less than MinEntryHeaderSize,
 	// it means that the final remaining capacity of the file is not enough to write a record,
