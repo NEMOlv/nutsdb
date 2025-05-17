@@ -23,18 +23,23 @@ import (
 )
 
 // ErrKeyNotFound is returned when the key is not in the b tree.
+// ErrKeyNotFound 当key不在BTree中时返回
 var ErrKeyNotFound = errors.New("key not found")
 
+// Item kv键值对
 type Item struct {
 	key    []byte
 	record *Record
 }
 
+// BTree BTree的封装
 type BTree struct {
 	btree *btree.BTreeG[*Item]
 }
 
+// NewBTree 新建BTree
 func NewBTree() *BTree {
+	// 返回BTree
 	return &BTree{
 		btree: btree.NewBTreeG[*Item](func(a, b *Item) bool {
 			return bytes.Compare(a.key, b.key) == -1
@@ -58,17 +63,20 @@ func (bt *BTree) Insert(record *Record) bool {
 	return replaced
 }
 
+// InsertRecord 将Record数据插入内存索引中
+// 提供给list数据结构使用的方法
 func (bt *BTree) InsertRecord(key []byte, record *Record) bool {
 	_, replaced := bt.btree.Set(&Item{key: key, record: record})
 	return replaced
 }
 
+// Delete 从内存索引中删除key对应的记录
 func (bt *BTree) Delete(key []byte) bool {
 	_, deleted := bt.btree.Delete(&Item{key: key})
 	return deleted
 }
 
-// All 获取所有数据
+// All 获取所有record数据
 func (bt *BTree) All() []*Record {
 	items := bt.btree.Items()
 
@@ -80,12 +88,14 @@ func (bt *BTree) All() []*Record {
 	return records
 }
 
+// AllItems 获取item数据
+// 提供给list数据结构使用的方法
 func (bt *BTree) AllItems() []*Item {
 	items := bt.btree.Items()
 	return items
 }
 
-// Range
+// Range 范围扫描 返回满足范围要求的record数据
 // 从start开始排列，小于等于end的key都加入records数组，否则不加入
 func (bt *BTree) Range(start, end []byte) []*Record {
 	records := make([]*Record, 0)
@@ -101,7 +111,7 @@ func (bt *BTree) Range(start, end []byte) []*Record {
 	return records
 }
 
-// PrefixScan 前缀扫描
+// PrefixScan 前缀扫描 返回满足前缀的records数据
 func (bt *BTree) PrefixScan(prefix []byte, offset, limitNum int) []*Record {
 	records := make([]*Record, 0)
 
@@ -127,7 +137,7 @@ func (bt *BTree) PrefixScan(prefix []byte, offset, limitNum int) []*Record {
 	return records
 }
 
-// PrefixSearchScan
+// PrefixSearchScan 前缀+正则扫描 返回满足前缀和正则表达式的records数据
 func (bt *BTree) PrefixSearchScan(prefix []byte, reg string, offset, limitNum int) []*Record {
 	records := make([]*Record, 0)
 
@@ -162,22 +172,28 @@ func (bt *BTree) PrefixSearchScan(prefix []byte, reg string, offset, limitNum in
 	return records
 }
 
+// Count 返回BTree的数据大小
 func (bt *BTree) Count() int {
 	return bt.btree.Len()
 }
 
+// PopMin 弹出BTree中最小的Item
+// todo 什么场景会用到这种功能？
 func (bt *BTree) PopMin() (*Item, bool) {
 	return bt.btree.PopMin()
 }
 
+// PopMax 弹出BTree中最大的Item
 func (bt *BTree) PopMax() (*Item, bool) {
 	return bt.btree.PopMax()
 }
 
+// Min 返回Btree中最小的Item
 func (bt *BTree) Min() (*Item, bool) {
 	return bt.btree.Min()
 }
 
+// Max 返回Btree中最大的Item
 func (bt *BTree) Max() (*Item, bool) {
 	return bt.btree.Max()
 }
